@@ -1,0 +1,60 @@
+name: Update profile README
+
+# 定时轮询：每天抓一次 GitHub 数据，重绘统计卡并在有变化时提交。
+# 触发方式：定时（cron）、手动（workflow_dispatch）、README/脚本改动后（push）。
+on:
+  schedule:
+    # UTC 03:17 = 北京时间 11:17，避开整点排队高峰
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'README.md'
+      - '.github/workflows/profile.yml'
+
+# 提交回仓库需要写权限；其余权限一律不给
+permissions:
+  contents: write
+
+# 同一时间只跑一个，避免两次运行互相覆盖
+concurrency:
+  group: profile-readme
+  cancel-in-progress: true
+
+jobs:
+  update:
+    # 双保险：用默认 GITHUB_TOKEN 推送的提交本身不会再触发工作流，这一层守卫是冗余的，
+    # 但若将来改用 PAT 推送就会真的产生自触发循环，故保留。
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 生成器零依赖，不需要 npm install
+      - name: Generate cards
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROFILE_LOGIN: ${{ github.repository_owner }}
+        run: node scripts/generate-readme.mjs
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # -A 才能把「生成器不再产出的旧图」这类删除也一并暂存
+          git add -A README.md assets
+          if git diff --staged --quiet; then
+            echo '数据无变化，跳过提交'
+            exit 0
+          fi
+          git commit -m 'chore: 自动更新主页数据 [skip ci]'
+          git push
