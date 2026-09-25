@@ -1,7 +1,8 @@
 /**
  * GitHub 数据采集（零依赖，只用 GraphQL）。
  *
- * 一次查询即可拿到统计卡所需的全部数据：账号信息、公开仓库列表、近一年贡献汇总。
+ * 统计卡取账号信息、公开仓库列表、近一年贡献汇总；
+ * 近七天追踪卡用 contributionsCollection(from,to) 单独取一个时间窗口。
  * Actions 里用内置的 GITHUB_TOKEN 即可，无需任何额外 secret。
  */
 
@@ -51,7 +52,19 @@ query ProfileData($login: String!, $after: String) {
   }
 }`;
 
-async function graphql(token, variables) {
+/** 近七天窗口查询：只有这个查询需要 from/to 变量。 */
+const WEEK_QUERY = `
+query WeekActivity($login: String!, $from: DateTime!, $to: DateTime!) {
+  user(login: $login) {
+    contributionsCollection(from: $from, to: $to) {
+      contributionCalendar {
+        weeks { contributionDays { date contributionCount weekday } }
+      }
+    }
+  }
+}`;
+
+async function graphql(token, query, variables) {
   const res = await fetch(API, {
     method: 'POST',
     headers: {
@@ -60,7 +73,7 @@ async function graphql(token, variables) {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: JSON.stringify({ query: QUERY, variables }),
+    body: JSON.stringify({ query, variables }),
   });
 
   const raw = await res.text();
@@ -90,6 +103,47 @@ function shorten(repo) {
 }
 
 /**
+ * 近七天活跃数据。
+ *
+ * 两个关键设计（都是踩过的坑）：
+ * 1. 取 14 天窗口而不是刚好 7 天。7 天窗口会横跨两个自然周，且首/末周可能不满 7 天，
+ *    所以必须把 weeks 摊平后按日期取末尾 7 个 —— 绝不能按周下标定位。
+ * 2. 「今天是哪天」以 API 返回的日期为准，不用本地时钟推算。GitHub 的日期按账号时区
+ *    切分，Actions 跑在 UTC，若自行推算在时区边界会整体错一天。多取几天做缓冲即可。
+ *
+ * @returns {{days: Array<{date: string, count: number, weekday: number|null}>, total: number}}
+ */
+async function fetchWeek(token, login, log = () => {}) {
+  const now = new Date();
+  const to = now.toISOString();
+  const fromDate = new Date(now);
+  fromDate.setUTCDate(fromDate.getUTCDate() - 14);
+  const from = fromDate.toISOString();
+
+  const data = await graphql(token, WEEK_QUERY, { login, from, to });
+  const calendar = data?.user?.contributionsCollection?.contributionCalendar;
+  if (!calendar) throw new Error(`取不到 ${login} 的近七天贡献数据`);
+
+  // 摊平所有周，按日期升序，再取末尾 7 天
+  const all = (calendar.weeks ?? [])
+    .flatMap((w) => w.contributionDays ?? [])
+    .filter((d) => d?.date)
+    .map((d) => ({ date: d.date, count: d.contributionCount ?? 0, weekday: d.weekday ?? null }))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+  const days = all.slice(-7);
+  log(`  近七天窗口：拿到 ${all.length} 天，取末尾 ${days.length} 天（${days[0]?.date} → ${days.at(-1)?.date}）`);
+
+  // 只返回 7 天口径的数字。
+  // 注意不要把 collection 的 commits/PRs/issues 挂在这里当「近七天」：
+  // 那些字段是按上面 14 天窗口统计的，口径与 days/total 不一致，容易被误用。
+  return {
+    days,
+    total: days.reduce((sum, d) => sum + d.count, 0),
+  };
+}
+
+/**
  * 抓取并派生主页所需的全部数据。
  * @param {{token: string, login: string, maxPages?: number, log?: (msg: string) => void}} options
  */
@@ -101,7 +155,7 @@ export async function fetchProfile({ token, login, maxPages = 5, log = () => {} 
 
   let after = null;
   for (let page = 1; page <= maxPages; page += 1) {
-    const data = await graphql(token, { login, after });
+    const data = await graphql(token, QUERY, { login, after });
     const u = data?.user;
     if (!u) throw new Error(`查不到用户 ${login}（token 是否可访问该账号？）`);
 
@@ -130,6 +184,8 @@ export async function fetchProfile({ token, login, maxPages = 5, log = () => {} 
     contributedTo: user.repositoriesContributedTo?.totalCount ?? 0,
   };
 
+  const week = await fetchWeek(token, login, log);
+
   return {
     login: user.login,
     followers: user.followers?.totalCount ?? 0,
@@ -138,6 +194,7 @@ export async function fetchProfile({ token, login, maxPages = 5, log = () => {} 
     totalStars,
     totalForks,
     contributions,
+    week,
     generatedAt: new Date().toISOString(),
   };
 }

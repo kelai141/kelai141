@@ -1,5 +1,7 @@
 /**
- * 总览统计卡：左侧「指标 → 数值」列表 + 右侧等级环。
+ * 两张自绘卡片：
+ *  - 总览统计卡：左侧「指标 → 数值」列表 + 右侧等级环
+ *  - 近七天追踪卡：7 根柱 + 日标签
  *
  * 版式对齐社区常见的 profile stats 卡片，但完全自绘：
  * 不依赖任何第三方图床，Actions 跑一次即可把结果提交回仓库，永不裂图。
@@ -22,10 +24,14 @@ export const THEME = {
   label: '#8E9CB5',
   value: '#E8EDF7',
   accent: '#7FA8DF',
+  /** 柱状图：有数据 / 无数据两种状态 */
+  bar: '#7FA8DF',
+  barEmpty: '#2A3950',
 };
 
 export const CARD_SIZE = {
   stats: { width: 760, height: 222 },
+  week: { width: 760, height: 210 },
 };
 
 const STYLE = `
@@ -150,4 +156,82 @@ export function renderStatsCard(data) {
   body.push(text(ringCx, ringCy + 11, rankGrade(score), { size: 30, weight: 800, anchor: 'middle', cls: 'value' }));
 
   return svgDoc({ width, height, title: `${data.login} 的 GitHub 统计`, style: STYLE, body: body.join('') });
+}
+
+/* ---------------------------------------------------------- 近七天追踪卡 */
+
+/** 'YYYY-MM-DD' → 'M/D'（纯字符串处理，避免解析 Date 引入时区坑）。 */
+function shortDate(isoDate) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(isoDate ?? ''));
+  if (!m) return String(isoDate ?? '');
+  return `${Number(m[2])}/${Number(m[3])}`;
+}
+
+/** weekday 索引（0=周日）→ 中文，数据直接取自 API，不自行推算日历。 */
+const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+/**
+ * 近七天活跃柱状图：主标题 + 7 根柱 + 星期标签。
+ *
+ * 柱高按窗口内最大值归一；全 0 时退化为等高底条，不会除零。
+ * 数据由 fetchWeek() 保证是「按日期升序的 7 天」，这里不再假设周结构。
+ */
+export function renderWeekCard(data) {
+  const { width, height } = CARD_SIZE.week;
+  const week = data.week ?? { days: [], total: 0 };
+  const days = week.days ?? [];
+  const max = days.reduce((m, d) => Math.max(m, d.count), 0);
+
+  const body = [
+    rect(0, 0, width, height, { rx: 20, fill: THEME.bg, stroke: THEME.border, strokeWidth: 1.5, cls: 'bg stroke' }),
+    rect(28, 30, 4, 18, { rx: 2, fill: THEME.accent }),
+    text(40, 45, '近七天活跃', { size: 19, weight: 700, cls: 'title' }),
+  ];
+
+  // 右上角：日期区间 + 合计（替代一排小字脚注）
+  if (days.length) {
+    const range = `${shortDate(days[0].date)} – ${shortDate(days[days.length - 1].date)}`;
+    body.push(text(width - 28, 34, `合计 ${week.total} 次`, { size: 13, weight: 600, anchor: 'end', cls: 'value' }));
+    body.push(text(width - 28, 50, range, { size: 11.5, anchor: 'end', cls: 'label' }));
+  }
+
+  // 绘图区
+  const chartTop = 92;
+  const chartBottom = 158;
+  const chartLeft = 28;
+  const chartRight = width - 28;
+  const plotHeight = chartBottom - chartTop;
+
+  // 基线
+  body.push(rect(chartLeft, chartBottom, chartRight - chartLeft, 1, { fill: THEME.border }));
+
+  if (days.length) {
+    const slot = (chartRight - chartLeft) / days.length;
+    const barW = Math.round(slot * 0.5);
+
+    days.forEach((day, i) => {
+      const cx = chartLeft + slot * i + slot / 2;
+      const x = cx - barW / 2;
+      const ratio = max > 0 ? day.count / max : 0;
+      // 有贡献的柱至少 10px，无贡献的底条只有 4px：
+      // 否则「1 次」会和「0 次」长得一样高（只靠颜色区分太弱）。
+      const h = day.count > 0 ? Math.max(10, ratio * plotHeight) : 4;
+      const y = chartBottom - h;
+
+      body.push(rect(x, y, barW, h, { rx: 3, fill: day.count > 0 ? THEME.bar : THEME.barEmpty }));
+
+      // 数值标在柱顶；0 次不标，避免一排 0 造成噪声
+      if (day.count > 0) {
+        body.push(text(cx, y - 6, String(day.count), { size: 11.5, weight: 700, anchor: 'middle', cls: 'value' }));
+      }
+
+      // 横轴只保留一行星期标签，保持干净
+      const name = day.weekday != null ? WEEKDAY_NAMES[day.weekday] ?? '' : '';
+      body.push(text(cx, chartBottom + 20, name, { size: 11, anchor: 'middle', cls: 'label' }));
+    });
+  } else {
+    body.push(text(width / 2, chartTop + plotHeight / 2, '暂无数据', { size: 13, anchor: 'middle', cls: 'label' }));
+  }
+
+  return svgDoc({ width, height, title: `${data.login} 近七天活跃`, style: STYLE, body: body.join('') });
 }

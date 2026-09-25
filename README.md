@@ -8,4 +8,6 @@
 
 <!-- STATS:START -->
 <img src="./assets/stats.svg" alt="kelai141 的 GitHub 统计" width="760">
+
+<img src="./assets/week.svg" alt="kelai141 近七天活跃" width="760">
 <!-- STATS:END -->

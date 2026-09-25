@@ -1,6 +1,6 @@
 name: Update profile README
 
-# 定时轮询：每天抓一次 GitHub 数据，重绘统计卡并在有变化时提交。
+# 定时轮询：每天抓一次 GitHub 数据，重绘统计卡与近七天活跃图，并在有变化时提交。
 # 触发方式：定时（cron）、手动（workflow_dispatch）、README/脚本改动后（push）。
 on:
   schedule:
