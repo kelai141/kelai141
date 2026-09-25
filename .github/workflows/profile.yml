@@ -42,7 +42,11 @@ jobs:
       # 生成器零依赖，不需要 npm install
       - name: Generate cards
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 优先用个人 PAT（PROFILE_TOKEN）：内置 GITHUB_TOKEN 不是「本人」身份，
+          # 查询贡献数时只能看到公开部分，会明显少于本人视角（实测同一 7 天窗口
+          # 内置 token 135 次 vs 本人 243 次），卡片数字会与个人主页对不上。
+          # 未配置 PROFILE_TOKEN 时自动回落到内置 token，工作流仍可正常跑。
+          GITHUB_TOKEN: ${{ secrets.PROFILE_TOKEN || secrets.GITHUB_TOKEN }}
           PROFILE_LOGIN: ${{ github.repository_owner }}
         run: node scripts/generate-readme.mjs
 
